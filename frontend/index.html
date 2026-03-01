@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Synced Streaming</title>
+</head>
+
+<body>
+      <h1>HLS Player</h1>
+
+      <div class="row">
+        <input
+          id="src"
+          type="url"
+          placeholder="http://localhost:8001/master.m3u8"
+          autocomplete="off"
+        />
+        <button id="load">Load</button>
+      </div>
+
+      <video id="video" controls playsinline></video>
+
+      <p class="small">
+        Safari (macOS/iOS) plays HLS natively. Other browsers use hls.js.
+      </p>
+
+      <details>
+        <summary>Debug</summary>
+        <pre id="log"></pre>
+      </details>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>
