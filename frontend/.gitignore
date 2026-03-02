@@ -1,3 +1,6 @@
+# Production environment variables
+.env.production
+
 # Logs
 logs
 *.log

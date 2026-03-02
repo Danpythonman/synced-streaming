@@ -1,123 +1,134 @@
 import "./style.css";
-import Hls from "hls.js";
-import { connectSyncWS } from "./ws";
 
+import { type State, connectSyncWS } from "./ws";
+import { attachHls } from "./hls"
+
+// Get URL of sync server, make sure it exists
+const syncUrl = import.meta.env.VITE_SYNC_URL as string;
+if (!syncUrl) {
+    throw new Error("VITE_SYNC_URL is not defined");
+}
+
+// Get important DOM elements, make sure they exist
 const video = document.getElementById("video") as HTMLVideoElement;
 const input = document.getElementById("src") as HTMLInputElement;
 const button = document.getElementById("load") as HTMLButtonElement;
-const log = document.getElementById("log") as HTMLPreElement;
+if (!video || !input || !button) {
+    throw new Error("Required DOM elements not found");
+}
 
+/** Destroys the current HLS.js instance. Null if no stream is loaded. */
 let cleanup: (() => void) | null = null;
-let syncCleanup: (() => void) | null = null;
-let applyingRemote = false;
-let lastRev = -1;
 
-function logMsg(msg: string) {
-    log.textContent += msg + "\n";
-}
+/** When true, local media events are ignored and not forwarded to the sync server.
+ * Set during programmatic playback changes to prevent echoing server state back. */
+let suppressingLocalEvents: boolean = false;
 
-const syncUrl = "ws://localhost:8002/ws";
+/** The revision number of the last applied server state. Used to discard duplicate or out-of-order messages. */
+let lastRev: number = -1;
 
-const sync = connectSyncWS(
-    syncUrl,
-    (s) => {
-        // ignore duplicates / out-of-order
-        if (s.rev <= lastRev) return;
-        lastRev = s.rev;
+/**
+ * Handles an incoming {@link State} message from the sync server by applying
+ * the remote playback state to the local video element.
+ *
+ * Ignores duplicate or out-of-order messages by comparing {@link State.rev}.
+ * Sets {@link suppressingLocalEvents} during the update to prevent local media events
+ * from being echoed back to the server.
+ *
+ * @param s - The incoming state from the sync server.
+ */
+function onState(s: State): void {
+    // Ignore duplicates and out-of-order messages.
+    if (s.rev <= lastRev) return;
+    lastRev = s.rev;
 
-        applyingRemote = true;
-        try {
-            // seek only if meaningfully different (tune threshold)
-            const diff = Math.abs(video.currentTime - s.t);
-            if (diff > 0.25) video.currentTime = s.t;
+    suppressingLocalEvents = true;
+    try {
+        // Only seek if the difference is meaningful. Tune threshold as needed.
+        const diff = Math.abs(video.currentTime - s.t);
+        if (diff > 0.25) video.currentTime = s.t;
 
-            if (s.paused) {
-                if (!video.paused) video.pause();
-            } else {
-                if (video.paused) {
-                    void video.play().catch(() => {
-                        // autoplay policies can block this until user interacts
-                        logMsg("Remote play blocked by browser autoplay policy");
-                    });
-                }
+        if (s.paused) {
+            if (!video.paused) {
+                video.pause();
             }
-        } finally {
-            // let any async media events fire before re-enabling local->server
-            setTimeout(() => (applyingRemote = false), 0);
+        } else {
+            if (video.paused) {
+                // void is intentional — the promise is deliberately unhandled here.
+                void video.play().catch(() => {
+                    // Autoplay policies can block playback until the user interacts.
+                    console.error("Remote play blocked by browser autoplay policy");
+                });
+            }
         }
-    },
-    logMsg,
-);
-
-syncCleanup = () => sync.close();
-
-function attachHls(video: HTMLVideoElement, src: string) {
-    // Safari native support
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = src;
-        video.play().catch(() => { });
-        return () => { };
+    } finally {
+        // Defer re-enabling local->server propagation to allow async media events to fire first.
+        setTimeout(() => (suppressingLocalEvents = false), 0);
     }
-
-    if (!Hls.isSupported()) {
-        throw new Error("HLS not supported in this browser.");
-    }
-
-    const hls = new Hls();
-
-    hls.on(Hls.Events.ERROR, (_, data) => {
-        console.log("HLS.js ERROR", data);
-    });
-    hls.on(Hls.Events.FRAG_LOADING, (_, data) => console.log("FRAG_LOADING", data.frag.url));
-    hls.on(Hls.Events.FRAG_LOADED, (_, data) => console.log("FRAG_LOADED", data.frag.url));
-    hls.on(Hls.Events.FRAG_LOAD_EMERGENCY_ABORTED, (_, data) =>
-        console.log("FRAG_LOAD_EMERGENCY_ABORTED", data)
-    );
-
-    hls.on(Hls.Events.ERROR, (_, data) => {
-        logMsg(`HLS error: ${data.type} / ${data.details}`);
-    });
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        logMsg("Manifest parsed, starting playback");
-        video.play().catch(() => { });
-    });
-
-    hls.loadSource(src);
-    hls.attachMedia(video);
-
-    return () => hls.destroy();
 }
 
-button.addEventListener("click", () => {
+const sync = connectSyncWS(syncUrl, onState);
+
+/**
+ * Handles the button click event for loading a new HLS video source.
+ *
+ * Clears any existing HLS instance, resets the video element, and attaches
+ * a new HLS stream from the provided input URL.
+ */
+function handleClick(): void {
+    // Get the video source, make sure it exists
     const src = input.value.trim();
-    if (!src) return;
+    if (!src) {
+        alert('No source video was provided!')
+        return;
+    }
 
-    if (cleanup) cleanup();
+    // If a cleanup function already exists, call it to clean up the previous video
+    if (cleanup) {
+        cleanup();
+    }
 
-    applyingRemote = true;
+    suppressingLocalEvents = true;
     try {
         video.pause();
         video.removeAttribute("src");
         video.load();
     } finally {
-        setTimeout(() => (applyingRemote = false), 0);
+        setTimeout(() => (suppressingLocalEvents = false), 0);
     }
 
     cleanup = attachHls(video, src);
-});
+};
 
-video.addEventListener("pause", () => {
-    if (applyingRemote) return;
+button.addEventListener("click", handleClick);
+
+/**
+ * Handles the video pause event by proposing a pause to the sync server.
+ * No-ops if the pause was triggered by a remote state update.
+ */
+function onVideoPause(): void {
+    if (suppressingLocalEvents) return;
     sync.proposePause(video.currentTime);
-});
+}
 
-video.addEventListener("play", () => {
-    if (applyingRemote) return;
+/**
+ * Handles the video play event by proposing a play to the sync server.
+ * No-ops if the play was triggered by a remote state update.
+ */
+function onVideoPlay(): void {
+    if (suppressingLocalEvents) return;
     sync.proposePlay(video.currentTime);
-});
+}
 
-video.addEventListener("seeked", () => {
-    if (applyingRemote) return;
+/**
+ * Handles the video seeked event by proposing a seek to the sync server.
+ * No-ops if the seek was triggered by a remote state update.
+ */
+function onVideoSeeked(): void {
+    if (suppressingLocalEvents) return;
     sync.proposeSeek(video.currentTime);
-});
+}
+
+video.addEventListener("pause", onVideoPause);
+video.addEventListener("play", onVideoPlay);
+video.addEventListener("seeked", onVideoSeeked);
