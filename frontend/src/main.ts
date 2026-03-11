@@ -1,6 +1,6 @@
 import "./style.css";
 
-import { type State, connectSyncWS } from "./ws";
+import { type State, type ChatBroadcast, connectSyncWS } from "./ws";
 import { attachHls } from "./hls"
 
 // Get URL of sync server, make sure it exists
@@ -73,7 +73,7 @@ function onState(s: State): void {
     }
 }
 
-const sync = connectSyncWS(syncUrl, onState);
+const sync = connectSyncWS(syncUrl, {onState, onChat});
 
 /**
  * Handles the button click event for loading a new HLS video source.
@@ -140,29 +140,28 @@ video.addEventListener("play", onVideoPlay);
 video.addEventListener("seeked", onVideoSeeked);
 
 
-// chat stuff
+// chat recieve
+function onChat(m: ChatBroadcast): void {
+    const row = document.createElement("div");
+    const meta = document.createElement("span");
+    row.appendChild(meta);
+    chatLog.appendChild(row);
 
+    meta.textContent = `${m.name}: ${m.text}`;
+}
+
+// chat send
 function getName(): string {
     return nameInput.value.trim() || "Anonymous";
 }
 
 function onChatSend(): void {
     const text = chatInput.value.trim();
-    const name = getName();
-    
     if (!text) return;
     chatInput.value = "";
 
-    //display
-    const row = document.createElement("div");
-    const meta = document.createElement("span");
-    row.appendChild(meta);
-    chatLog.appendChild(row);
-
-    meta.textContent = `${name}: ${text}`;
-
-    // TODO send to web socket
-
+    //send to web socket
+    sync.sendChat(getName(), text);
 }
 
 chatSend.addEventListener("click", onChatSend);
