@@ -42,3 +42,26 @@ pre {
     padding: 10px;
     border-radius: 8px;
 }
+
+.viewers-badge {
+    font-size: 13px;
+    color: #888;
+    font-weight: normal;
+}
+
+.chat {
+    margin-top: 16px;
+    max-width: 960px;
+}
+
+.chat-log {
+    height: 200px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    padding: 8px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}

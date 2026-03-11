@@ -13,7 +13,13 @@ if (!syncUrl) {
 const video = document.getElementById("video") as HTMLVideoElement;
 const input = document.getElementById("src") as HTMLInputElement;
 const button = document.getElementById("load") as HTMLButtonElement;
-if (!video || !input || !button) {
+const nameInput  = document.getElementById("chat-name") as HTMLInputElement;
+const chatInput  = document.getElementById("chat-input") as HTMLInputElement;
+const chatSend   = document.getElementById("chat-send")  as HTMLButtonElement;
+const chatLog    = document.getElementById("chat-log")   as HTMLDivElement;
+const viewersBadge = document.getElementById("viewers-badge") as HTMLSpanElement;
+
+if (!video || !input || !button || !nameInput || !chatInput || !chatSend || !chatLog || !viewersBadge) {
     throw new Error("Required DOM elements not found");
 }
 
@@ -132,3 +138,31 @@ function onVideoSeeked(): void {
 video.addEventListener("pause", onVideoPause);
 video.addEventListener("play", onVideoPlay);
 video.addEventListener("seeked", onVideoSeeked);
+
+
+// chat stuff
+
+function getName(): string {
+    return nameInput.value.trim() || "Anonymous";
+}
+
+function onChatSend(): void {
+    const text = chatInput.value.trim();
+    const name = getName();
+    
+    if (!text) return;
+    chatInput.value = "";
+
+    //display
+    const row = document.createElement("div");
+    const meta = document.createElement("span");
+    row.appendChild(meta);
+    chatLog.appendChild(row);
+
+    meta.textContent = `${name}: ${text}`;
+
+    // TODO send to web socket
+
+}
+
+chatSend.addEventListener("click", onChatSend);
