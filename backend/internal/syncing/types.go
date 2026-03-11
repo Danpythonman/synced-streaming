@@ -22,3 +22,18 @@ type State struct {
 	ServerTs float64 `json:"serverTs"` // server timestamp (seconds since epoch)
 	Rev      int64   `json:"rev"`      // state revision
 }
+
+// ChatSend is a client-to-server message containing a chat message.
+type ChatSend struct {
+	Type string `json:"type"` // must be "chat"
+	Name string `json:"name"` // display name chosen by the client
+	Text string `json:"text"` // message body (non-empty)
+}
+
+// ChatBroadcast is a server-to-client message broadcasting a chat message.
+type ChatBroadcast struct {
+	Type string  `json:"type"`      // always "chat"
+	Name string  `json:"name"`      // sender display name
+	Text string  `json:"text"`      // message body
+	Ts   float64 `json:"ts"`        // server timestamp (seconds since epoch)
+}
