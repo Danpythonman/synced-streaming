@@ -27,6 +27,26 @@ export type State = {
 };
 
 /**
+ * A chat message sent from the client to the server.
+ */
+export type ChatSend = {
+    type: "chat";
+    name: string;
+    text: string;
+};
+
+/**
+ * A chat message broadcast from the server to all clients.
+ */
+export type ChatBroadcast = {
+    type: "chat";
+    name: string;
+    text: string;
+    /** Server timestamp in seconds since epoch. */
+    ts: number;
+};
+
+/**
  * The object returned by {@link connectSyncWS}, providing controls for the sync WebSocket connection.
  */
 export type SyncWSControls = {
@@ -40,6 +60,14 @@ export type SyncWSControls = {
     proposePlay: (t: number) => void;
     /** Proposes seeking to the given position in seconds. */
     proposeSeek: (t: number) => void;
+
+    sendChat: (name: string, text: string) => void;
+
+};
+
+export type SyncWSCallbacks = {
+    onState: (s: State) => void;
+    onChat: (m: ChatBroadcast) => void;
 };
 
 /**
@@ -82,7 +110,7 @@ function onError(ev: Event): void {
  * @param onState - Callback invoked whenever a valid {@link State} message is received.
  * @returns A WebSocket message handler.
  */
-function createOnMessage(onState: (s: State) => void): (ev: MessageEvent) => void {
+function createOnMessage(callbacks: SyncWSCallbacks): (ev: MessageEvent) => void {
     return function onMessage(ev: MessageEvent): void {
         let msg: unknown;
         try {
@@ -91,10 +119,12 @@ function createOnMessage(onState: (s: State) => void): (ev: MessageEvent) => voi
             return;
         }
         if (!msg || typeof msg !== "object") return;
-        const m = msg as Partial<State>;
-        if (m.type === "state" && typeof m.rev === "number") {
-            // TODO: verify type of m to ensure it is a State object
-            onState(m as State);
+        const m = msg as { type?: string };
+
+        if (m.type === "state") {
+            callbacks.onState(msg as State);
+        } else if (m.type === "chat") {
+            callbacks.onChat(msg as ChatBroadcast);
         }
     };
 }
@@ -105,8 +135,8 @@ function createOnMessage(onState: (s: State) => void): (ev: MessageEvent) => voi
  * @param ws - The WebSocket instance to send messages on.
  * @returns A function that sends a {@link Propose} message.
  */
-function createSend(ws: WebSocket): (p: Propose) => void {
-    return function send(p: Propose): void {
+function createSend(ws: WebSocket): (p: Propose| ChatSend) => void {
+    return function send(p: Propose| ChatSend): void {
         if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify(p));
     };
@@ -160,6 +190,12 @@ function createProposeSeek(send: (p: Propose) => void): (t: number) => void {
     };
 }
 
+function createChat(send: (p: ChatSend) => void): (name: string, text: string) => void {
+    return function sendChat(name: string, text: string): void {
+        send({ type: "chat", name, text });
+    };
+}
+
 /**
  * Connects to a sync WebSocket server and returns controls for proposing playback actions.
  *
@@ -178,7 +214,8 @@ function createProposeSeek(send: (p: Propose) => void): (t: number) => void {
  * sync.proposePlay(42.5);
  * sync.close();
  */
-export function connectSyncWS(url: string, onState: (s: State) => void): SyncWSControls {
+export function connectSyncWS(url: string, 
+    callbacks: SyncWSCallbacks): SyncWSControls {
     // Create new WebSocket connection
     const ws = new WebSocket(url);
 
@@ -186,9 +223,9 @@ export function connectSyncWS(url: string, onState: (s: State) => void): SyncWSC
     ws.addEventListener("open", createOnOpen(url));
     ws.addEventListener("close", createOnClose(url));
     ws.addEventListener("error", onError);
-    ws.addEventListener("message", createOnMessage(onState));
+    ws.addEventListener("message", createOnMessage(callbacks));
 
-    // Create the function to send data through the WebSocket
+    // Create the function to send playback data through the WebSocket
     const send = createSend(ws);
 
     // Return the API for the client to interact with the WebSocket
@@ -198,5 +235,6 @@ export function connectSyncWS(url: string, onState: (s: State) => void): SyncWSC
         proposePause: createProposePause(send),
         proposePlay: createProposePlay(send),
         proposeSeek: createProposeSeek(send),
+        sendChat: createChat(send)
     } satisfies SyncWSControls;
 }

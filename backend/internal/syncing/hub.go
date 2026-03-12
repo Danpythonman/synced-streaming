@@ -3,6 +3,7 @@ package syncing
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,6 +71,23 @@ func (h *Hub) broadcastLocked() {
 	}
 }
 
+// broadcastChat sends a ChatBroadcast to all connected clients.
+func (h *Hub) broadcastChat(sender ChatSend) {
+	out := ChatBroadcast{
+		Type: "chat",
+		Name: sender.Name,
+		Text: sender.Text,
+		Ts:   nowSeconds(),
+	}
+	msg, _ := json.Marshal(out)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		_ = c.WriteMessage(websocket.TextMessage, msg)
+	}
+}
+
 // Current time in seconds since epoch.
 func nowSeconds() float64 {
 	return float64(time.Now().UnixNano()) / 1e9
@@ -127,15 +145,33 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		var p Propose
-		if err := json.Unmarshal(data, &p); err != nil {
-			continue
+		// Peek at the type field to route the message.
+		var envelope struct {
+			Type string `json:"type"`
 		}
-		if p.Type != "propose" {
+		if err := json.Unmarshal(data, &envelope); err != nil {
 			continue
 		}
 
-		h.applyProposalAndBroadcast(p)
+		switch envelope.Type {
+		case "propose":
+			var p Propose
+			if err := json.Unmarshal(data, &p); err != nil {
+				continue
+			}
+			h.applyProposalAndBroadcast(p)
+
+		case "chat":
+			var chat ChatSend
+			if err := json.Unmarshal(data, &chat); err != nil {
+				continue
+			}
+			// Basic validation: require non-empty text.
+			if strings.TrimSpace(chat.Text) == "" {
+				continue
+			}
+			h.broadcastChat(chat)
+		}
 	}
 
 	h.unRegisterClient(c)

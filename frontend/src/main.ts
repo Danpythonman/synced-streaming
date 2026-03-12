@@ -1,6 +1,6 @@
 import "./style.css";
 
-import { type State, connectSyncWS } from "./ws";
+import { type State, type ChatBroadcast, connectSyncWS } from "./ws";
 import { attachHls } from "./hls"
 
 // Get URL of sync server, make sure it exists
@@ -13,7 +13,13 @@ if (!syncUrl) {
 const video = document.getElementById("video") as HTMLVideoElement;
 const input = document.getElementById("src") as HTMLInputElement;
 const button = document.getElementById("load") as HTMLButtonElement;
-if (!video || !input || !button) {
+const nameInput  = document.getElementById("chat-name") as HTMLInputElement;
+const chatInput  = document.getElementById("chat-input") as HTMLInputElement;
+const chatSend   = document.getElementById("chat-send")  as HTMLButtonElement;
+const chatLog    = document.getElementById("chat-log")   as HTMLDivElement;
+const viewersBadge = document.getElementById("viewers-badge") as HTMLSpanElement;
+
+if (!video || !input || !button || !nameInput || !chatInput || !chatSend || !chatLog || !viewersBadge) {
     throw new Error("Required DOM elements not found");
 }
 
@@ -67,7 +73,7 @@ function onState(s: State): void {
     }
 }
 
-const sync = connectSyncWS(syncUrl, onState);
+const sync = connectSyncWS(syncUrl, {onState, onChat});
 
 /**
  * Handles the button click event for loading a new HLS video source.
@@ -132,3 +138,30 @@ function onVideoSeeked(): void {
 video.addEventListener("pause", onVideoPause);
 video.addEventListener("play", onVideoPlay);
 video.addEventListener("seeked", onVideoSeeked);
+
+
+// chat recieve
+function onChat(m: ChatBroadcast): void {
+    const row = document.createElement("div");
+    const meta = document.createElement("span");
+    row.appendChild(meta);
+    chatLog.appendChild(row);
+
+    meta.textContent = `${m.name}: ${m.text}`;
+}
+
+// chat send
+function getName(): string {
+    return nameInput.value.trim() || "Anonymous";
+}
+
+function onChatSend(): void {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    chatInput.value = "";
+
+    //send to web socket
+    sync.sendChat(getName(), text);
+}
+
+chatSend.addEventListener("click", onChatSend);
