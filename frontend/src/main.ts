@@ -36,8 +36,8 @@ let suppressingLocalEvents: boolean = false;
 /** The revision number of the last applied server state. Used to discard duplicate or out-of-order messages. */
 let lastRev: number = -1;
 
-/** Whether the nickname has been committed (join sent). */
-let nameLocked: boolean = false;
+// Whether the user has loaded a video (joined as a viewer).
+let joined = false;
 
 /**
  * Handles an incoming {@link State} message from the sync server by applying
@@ -110,13 +110,22 @@ function handleClick(): void {
     }
 
     cleanup = attachHls(video, src);
-
-   // Become a viewer on first load. If they already clicked Set, name is locked;
-    // otherwise auto-join as anonymous now.
-    lockNickname(nameInput.value);
 };
 
 button.addEventListener("click", handleClick);
+
+video.addEventListener("loadedmetadata", () => {
+    if (!joined) {
+        joined = true;
+        const name = nameInput.value.trim() || "anonymous";
+        // Lock the nickname input now.
+        nameInput.disabled = true;
+        nameBtn.disabled = true;
+        nameStatus.textContent = name;
+        nameStatus.classList.add("locked");
+        sync.sendJoin(name);
+    }
+});
 
 /**
  * Handles the video pause event by proposing a pause to the sync server.
@@ -176,26 +185,21 @@ chatInput.addEventListener("keydown", (e: KeyboardEvent) => {
 });
 
 // set name
-function lockNickname(name: string): void {
-    if (nameLocked) return;
-    nameLocked = true;
-    const display = name.trim() || "anonymous";
-
-    nameInput.disabled = true;
-    nameBtn.disabled = true;
+ function previewNickname(): void {
+    if (joined) return; // already locked after load
+    const display = nameInput.value.trim() || "anonymous";
     nameStatus.textContent = display;
-    nameStatus.classList.add("locked");
-    sync.sendJoin(display);
 }
  
-nameBtn.addEventListener("click", () => lockNickname(nameInput.value));
-
+nameInput.addEventListener("input", previewNickname);
+nameBtn.addEventListener("click", previewNickname);
 nameInput.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter") lockNickname(nameInput.value);
+    if (e.key === "Enter") previewNickname();
 });
 
 // presence update (viewer count)
 function onPresence(p: Presence): void {
+    if (!joined) return;
     viewersBadge.textContent = `${p.count} viewer${p.count !== 1 ? "s" : ""}`;
     viewersList.textContent = p.viewers.join(", ");
 }
