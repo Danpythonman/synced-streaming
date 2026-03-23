@@ -111,11 +111,9 @@ function handleClick(): void {
 
     cleanup = attachHls(video, src);
 
-    // Send join on first load — this is when the user becomes a "viewer".
-    if (!nameLocked) {
-        const name = nameInput.value.trim() || "anonymous";
-        lockNickname(name);  // sends sendJoin internally
-    }
+   // Become a viewer on first load. If they already clicked Set, name is locked;
+    // otherwise auto-join as anonymous now.
+    lockNickname(nameInput.value);
 };
 
 button.addEventListener("click", handleClick);
@@ -179,22 +177,21 @@ chatInput.addEventListener("keydown", (e: KeyboardEvent) => {
 
 // set name
 function lockNickname(name: string): void {
+    if (nameLocked) return;
     nameLocked = true;
+    const display = name.trim() || "anonymous";
+
     nameInput.disabled = true;
     nameBtn.disabled = true;
-    const display = name.trim() || "anonymous";
     nameStatus.textContent = display;
     nameStatus.classList.add("locked");
     sync.sendJoin(display);
 }
  
-nameBtn.addEventListener("click", () => {
-    if (nameLocked) return;
-    lockNickname(nameInput.value);
-});
- 
+nameBtn.addEventListener("click", () => lockNickname(nameInput.value));
+
 nameInput.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter" && !nameLocked) lockNickname(nameInput.value);
+    if (e.key === "Enter") lockNickname(nameInput.value);
 });
 
 // presence update (viewer count)

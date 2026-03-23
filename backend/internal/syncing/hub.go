@@ -11,10 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	defaultNickname = "anonymous"
-	maxNicknameLen  = 32
-)
+const maxNicknameLen = 32
 
 // Hub manages websocket clients and broadcasts the authoritative playback State.
 //
@@ -22,7 +19,7 @@ const (
 // by the internal mutex.
 type Hub struct {
 	mu      sync.Mutex
-	clients map[*websocket.Conn]string
+	clients map[*websocket.Conn]string // "" = connected, not yet joined
 
 	state State
 	rev   int64
@@ -46,90 +43,78 @@ func NewHub() *Hub {
 			Rev:      0,
 		},
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true }, // dev only; restrict for prod
+			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 	}
 }
 
-// Register client and send initial state.
-func (h *Hub) registerClient(c *websocket.Conn) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.clients[c] = ""
-	initMsg, _ := json.Marshal(h.state)
-	_ = c.WriteMessage(websocket.TextMessage, initMsg)
-
-	presence := h.buildPresenceLocked()
-	h.broadcastPresence(presence)
-}
-
-// Unregister client.
-func (h *Hub) unRegisterClient(c *websocket.Conn) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	delete(h.clients, c)
-
-	presence := h.buildPresenceLocked()
-	h.broadcastPresence(presence)
-}
-
-// broadcastLocked sends the current State to all clients.
-//
-// h.mu must be held by the caller.
-func (h *Hub) broadcastLocked() {
-	msg, _ := json.Marshal(h.state)
+// sendAll sends msg to every client. Caller must hold h.mu.
+func (h *Hub) sendAll(msg []byte) {
 	for c := range h.clients {
 		_ = c.WriteMessage(websocket.TextMessage, msg)
 	}
 }
 
-// setNickname sets the nickname for a connection if it still has the default
-// nickname (i.e. join has not been called before). Returns false if ignored.
-func (h *Hub) setNickname(c *websocket.Conn, name string) bool {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = defaultNickname
-	}
-	// Truncate to maxNicknameLen runes.
-	if utf8.RuneCountInString(name) > maxNicknameLen {
-		runes := []rune(name)
-		name = string(runes[:maxNicknameLen])
-	}
- 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	current, ok := h.clients[c]
-	if !ok || current != "" {
-		return false
-	}
-	// Only honour the first join (while still at default).
-	if current != defaultNickname {
-		return false
-	}
-	h.clients[c] = name
-	presence := h.buildPresenceLocked()
- 
-	h.broadcastPresence(presence)
-	return true
-}
- 
-// buildPresenceLocked constructs a Presence value from the current client map.
-// h.mu must be held by the caller.
-func (h *Hub) buildPresenceLocked() Presence {
+// presenceMsg builds and marshals a Presence message. Caller must hold h.mu.
+func (h *Hub) presenceMsg() []byte {
 	viewers := make([]string, 0, len(h.clients))
 	for _, name := range h.clients {
 		if name != "" {
-            viewers = append(viewers, name)
-        }
+			viewers = append(viewers, name)
+		}
 	}
-	return Presence{
+	msg, _ := json.Marshal(Presence{
 		Type:    "presence",
 		Count:   len(viewers),
 		Viewers: viewers,
+	})
+	return msg
+}
+
+func (h *Hub) registerClient(c *websocket.Conn) {
+	h.mu.Lock()
+	h.clients[c] = ""
+	init, _ := json.Marshal(h.state)
+	_ = c.WriteMessage(websocket.TextMessage, init)
+	// Don't broadcast presence — client hasn't joined yet.
+	h.mu.Unlock()
+}
+
+func (h *Hub) unRegisterClient(c *websocket.Conn) {
+	h.mu.Lock()
+	delete(h.clients, c)
+	h.sendAll(h.presenceMsg())
+	h.mu.Unlock()
+}
+
+func (h *Hub) setNickname(c *websocket.Conn, name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "anonymous"
+	}
+	if utf8.RuneCountInString(name) > maxNicknameLen {
+		name = string([]rune(name)[:maxNicknameLen])
+	}
+	h.mu.Lock()
+	if current, ok := h.clients[c]; ok && current == "" {
+		h.clients[c] = name
+		h.sendAll(h.presenceMsg())
+	}
+	h.mu.Unlock()
+}
+ 
+ 
+// broadcastPresence sends a Presence message to all connected clients.
+func (h *Hub) broadcastPresence(p Presence) {
+	msg, _ := json.Marshal(p)
+	for c := range h.clients {
+		_ = c.WriteMessage(websocket.TextMessage, msg)
 	}
 }
  
+// broadcastChat sends a ChatBroadcast to all connected clients.
+// The sender name is resolved from the server-side nickname, not the client payload.
+
 // broadcastPresence sends a Presence message to all connected clients.
 func (h *Hub) broadcastPresence(p Presence) {
 	msg, _ := json.Marshal(p)
@@ -142,21 +127,19 @@ func (h *Hub) broadcastPresence(p Presence) {
 // The sender name is resolved from the server-side nickname, not the client payload.
 func (h *Hub) broadcastChat(c *websocket.Conn, text string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	name, ok := h.clients[c]
-	if (!ok || name == ""){
+	if !ok || name == "" {
+		h.mu.Unlock()
 		return
 	}
-	out := ChatBroadcast{
+	msg, _ := json.Marshal(ChatBroadcast{
 		Type: "chat",
 		Name: name,
 		Text: text,
 		Ts:   nowSeconds(),
-	}
-	msg, _ := json.Marshal(out)
-	for conn := range h.clients {
-		_ = conn.WriteMessage(websocket.TextMessage, msg)
-	}
+	})
+	h.sendAll(msg)
+	h.mu.Unlock()
 }
 
 // Current time in seconds since epoch.
@@ -191,8 +174,12 @@ func (h *Hub) applyProposalAndBroadcast(p Propose) {
 	h.rev++
 	h.state.Rev = h.rev
 	h.state.ServerTs = now
+	msg, _ := json.Marshal(h.state)
+	h.sendAll(msg)
+}
 
-	h.broadcastLocked()
+func nowSeconds() float64 {
+	return float64(time.Now().UnixNano()) / 1e9
 }
 
 // HandleWS upgrades the HTTP request to a websocket, registers the client,
@@ -205,9 +192,12 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
- 
+
 	h.registerClient(c)
  
+ 
+	// Read loop.
+
 	// Read loop.
 	for {
 		// Blocking call to read message when available
@@ -215,43 +205,30 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
- 
-		// Peek at the type field to route the message.
-		var envelope struct {
+		var env struct {
 			Type string `json:"type"`
 		}
-		if err := json.Unmarshal(data, &envelope); err != nil {
+		if json.Unmarshal(data, &env) != nil {
 			continue
 		}
- 
-		switch envelope.Type {
+		switch env.Type {
 		case "propose":
 			var p Propose
-			if err := json.Unmarshal(data, &p); err != nil {
-				continue
+			if json.Unmarshal(data, &p) == nil {
+				h.applyProposalAndBroadcast(p)
 			}
-			h.applyProposalAndBroadcast(p)
- 
 		case "chat":
 			var chat ChatSend
-			if err := json.Unmarshal(data, &chat); err != nil {
-				continue
+			if json.Unmarshal(data, &chat) == nil && strings.TrimSpace(chat.Text) != "" {
+				h.broadcastChat(c, strings.TrimSpace(chat.Text))
 			}
-			// Basic validation: require non-empty text.
-			if strings.TrimSpace(chat.Text) == "" {
-				continue
-			}
-			// Name comes from server-side map; ignore client-supplied name.
-			h.broadcastChat(c, strings.TrimSpace(chat.Text))
- 
 		case "join":
 			var j Join
-			if err := json.Unmarshal(data, &j); err != nil {
-				continue
+			if json.Unmarshal(data, &j) == nil {
+				h.setNickname(c, j.Name)
 			}
-			h.setNickname(c, j.Name)
 		}
 	}
- 
+
 	h.unRegisterClient(c)
 }
