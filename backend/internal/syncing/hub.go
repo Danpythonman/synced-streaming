@@ -6,8 +6,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	defaultNickname = "anonymous"
+	maxNicknameLen  = 32
 )
 
 // Hub manages websocket clients and broadcasts the authoritative playback State.
@@ -16,7 +22,7 @@ import (
 // by the internal mutex.
 type Hub struct {
 	mu      sync.Mutex
-	clients map[*websocket.Conn]struct{}
+	clients map[*websocket.Conn]string
 
 	state State
 	rev   int64
@@ -31,7 +37,7 @@ type Hub struct {
 // production deployments.
 func NewHub() *Hub {
 	return &Hub{
-		clients: make(map[*websocket.Conn]struct{}),
+		clients: make(map[*websocket.Conn]string),
 		state: State{
 			Type:     "state",
 			Paused:   true,
@@ -49,9 +55,12 @@ func NewHub() *Hub {
 func (h *Hub) registerClient(c *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.clients[c] = struct{}{}
+	h.clients[c] = ""
 	initMsg, _ := json.Marshal(h.state)
 	_ = c.WriteMessage(websocket.TextMessage, initMsg)
+
+	presence := h.buildPresenceLocked()
+	h.broadcastPresence(presence)
 }
 
 // Unregister client.
@@ -59,6 +68,9 @@ func (h *Hub) unRegisterClient(c *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.clients, c)
+
+	presence := h.buildPresenceLocked()
+	h.broadcastPresence(presence)
 }
 
 // broadcastLocked sends the current State to all clients.
@@ -71,20 +83,79 @@ func (h *Hub) broadcastLocked() {
 	}
 }
 
+// setNickname sets the nickname for a connection if it still has the default
+// nickname (i.e. join has not been called before). Returns false if ignored.
+func (h *Hub) setNickname(c *websocket.Conn, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = defaultNickname
+	}
+	// Truncate to maxNicknameLen runes.
+	if utf8.RuneCountInString(name) > maxNicknameLen {
+		runes := []rune(name)
+		name = string(runes[:maxNicknameLen])
+	}
+ 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	current, ok := h.clients[c]
+	if !ok || current != "" {
+		return false
+	}
+	// Only honour the first join (while still at default).
+	if current != defaultNickname {
+		return false
+	}
+	h.clients[c] = name
+	presence := h.buildPresenceLocked()
+ 
+	h.broadcastPresence(presence)
+	return true
+}
+ 
+// buildPresenceLocked constructs a Presence value from the current client map.
+// h.mu must be held by the caller.
+func (h *Hub) buildPresenceLocked() Presence {
+	viewers := make([]string, 0, len(h.clients))
+	for _, name := range h.clients {
+		if name != "" {
+            viewers = append(viewers, name)
+        }
+	}
+	return Presence{
+		Type:    "presence",
+		Count:   len(viewers),
+		Viewers: viewers,
+	}
+}
+ 
+// broadcastPresence sends a Presence message to all connected clients.
+func (h *Hub) broadcastPresence(p Presence) {
+	msg, _ := json.Marshal(p)
+	for c := range h.clients {
+		_ = c.WriteMessage(websocket.TextMessage, msg)
+	}
+}
+ 
 // broadcastChat sends a ChatBroadcast to all connected clients.
-func (h *Hub) broadcastChat(sender ChatSend) {
+// The sender name is resolved from the server-side nickname, not the client payload.
+func (h *Hub) broadcastChat(c *websocket.Conn, text string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	name, ok := h.clients[c]
+	if (!ok || name == ""){
+		return
+	}
 	out := ChatBroadcast{
 		Type: "chat",
-		Name: sender.Name,
-		Text: sender.Text,
+		Name: name,
+		Text: text,
 		Ts:   nowSeconds(),
 	}
 	msg, _ := json.Marshal(out)
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for c := range h.clients {
-		_ = c.WriteMessage(websocket.TextMessage, msg)
+	for conn := range h.clients {
+		_ = conn.WriteMessage(websocket.TextMessage, msg)
 	}
 }
 
@@ -134,9 +205,9 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-
+ 
 	h.registerClient(c)
-
+ 
 	// Read loop.
 	for {
 		// Blocking call to read message when available
@@ -144,7 +215,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
-
+ 
 		// Peek at the type field to route the message.
 		var envelope struct {
 			Type string `json:"type"`
@@ -152,7 +223,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(data, &envelope); err != nil {
 			continue
 		}
-
+ 
 		switch envelope.Type {
 		case "propose":
 			var p Propose
@@ -160,7 +231,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			h.applyProposalAndBroadcast(p)
-
+ 
 		case "chat":
 			var chat ChatSend
 			if err := json.Unmarshal(data, &chat); err != nil {
@@ -170,9 +241,17 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(chat.Text) == "" {
 				continue
 			}
-			h.broadcastChat(chat)
+			// Name comes from server-side map; ignore client-supplied name.
+			h.broadcastChat(c, strings.TrimSpace(chat.Text))
+ 
+		case "join":
+			var j Join
+			if err := json.Unmarshal(data, &j); err != nil {
+				continue
+			}
+			h.setNickname(c, j.Name)
 		}
 	}
-
+ 
 	h.unRegisterClient(c)
 }
