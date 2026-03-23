@@ -43,12 +43,62 @@ pre {
     border-radius: 8px;
 }
 
-.viewers-badge {
+/* Presence */
+.presence {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 8px 0 4px;
     font-size: 13px;
-    color: #888;
-    font-weight: normal;
 }
 
+.viewers-badge {
+    font-weight: 600;
+    color: #444;
+}
+
+.viewers-list {
+    color: #888;
+}
+
+.viewers-list:not(:empty)::before {
+    content: "— ";
+}
+
+/* Nickname */
+.nickname-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 12px;
+    font-size: 14px;
+}
+
+.nickname-row label {
+    color: #555;
+    white-space: nowrap;
+}
+
+.nickname-row input {
+    padding: 6px 8px;
+    width: 160px;
+}
+
+.nickname-status {
+    color: #888;
+    font-size: 13px;
+}
+
+.nickname-status.locked {
+    color: #2a7;
+    font-weight: 500;
+}
+
+.nickname-status.locked::before {
+    content: "✓ ";
+}
+
+/* Chat */
 .chat {
     margin-top: 16px;
     max-width: 960px;

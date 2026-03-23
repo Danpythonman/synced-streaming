@@ -9,40 +9,48 @@
 </head>
 
 <body>
-      <h1>HLS Player</h1>
+    <h1>HLS Player</h1>
 
-      <div class="row">
+    <div class="row">
         <input
-          id="src"
-          type="url"
-          placeholder="http://localhost:8001/master.m3u8"
-          autocomplete="off"
+            id="src"
+            type="url"
+            placeholder="http://localhost:8001/master.m3u8"
+            autocomplete="off"
         />
         <button id="load">Load</button>
-      </div>
+    </div>
 
-      <video id="video" controls playsinline></video>
+    <video id="video" controls playsinline></video>
 
-      <span id="viewers-badge" class="viewers-badge">0</span>
+    <div class="presence">
+        <span id="viewers-badge" class="viewers-badge">0 viewers</span>
+        <span id="viewers-list" class="viewers-list"></span>
+    </div>
 
-      <div class="chat">
+    <div class="name-row">
+        <label for="name-input">Nickname:</label>
+        <input id="name-input" type="text" placeholder="anonymous" maxlength="32" />
+        <button id="name-btn">Set</button>
+        <span id="name-status" class="name-status"></span>
+    </div>
+
+    <div class="chat">
         <div id="chat-log" class="chat-log"></div>
         <div class="row">
-            <input id="chat-name" type="text" placeholder="Name" maxlength="32" style="flex: 0 1 120px" />
             <input id="chat-input" type="text" placeholder="Say something…" maxlength="500" />
             <button id="chat-send">Send</button>
         </div>
-      </div>
+    </div>
 
-      <p class="small">
+    <p class="small">
         Safari (macOS/iOS) plays HLS natively. Other browsers use hls.js.
-      </p>
+    </p>
 
-      <details>
+    <details>
         <summary>Debug</summary>
         <pre id="log"></pre>
-      </details>
-    </div>
+    </details>
 
     <script type="module" src="/src/main.ts"></script>
 </body>
