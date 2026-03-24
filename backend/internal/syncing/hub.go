@@ -111,18 +111,7 @@ func (h *Hub) broadcastPresence(p Presence) {
 		_ = c.WriteMessage(websocket.TextMessage, msg)
 	}
 }
- 
-// broadcastChat sends a ChatBroadcast to all connected clients.
-// The sender name is resolved from the server-side nickname, not the client payload.
 
-// broadcastPresence sends a Presence message to all connected clients.
-func (h *Hub) broadcastPresence(p Presence) {
-	msg, _ := json.Marshal(p)
-	for c := range h.clients {
-		_ = c.WriteMessage(websocket.TextMessage, msg)
-	}
-}
- 
 // broadcastChat sends a ChatBroadcast to all connected clients.
 // The sender name is resolved from the server-side nickname, not the client payload.
 func (h *Hub) broadcastChat(c *websocket.Conn, text string) {
@@ -176,10 +165,6 @@ func (h *Hub) applyProposalAndBroadcast(p Propose) {
 	h.state.ServerTs = now
 	msg, _ := json.Marshal(h.state)
 	h.sendAll(msg)
-}
-
-func nowSeconds() float64 {
-	return float64(time.Now().UnixNano()) / 1e9
 }
 
 // HandleWS upgrades the HTTP request to a websocket, registers the client,
