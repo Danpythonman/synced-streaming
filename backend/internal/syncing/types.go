@@ -26,7 +26,6 @@ type State struct {
 // ChatSend is a client-to-server message containing a chat message.
 type ChatSend struct {
 	Type string `json:"type"` // must be "chat"
-	Name string `json:"name"` // display name chosen by the client
 	Text string `json:"text"` // message body (non-empty)
 }
 
@@ -36,4 +35,18 @@ type ChatBroadcast struct {
 	Name string  `json:"name"`      // sender display name
 	Text string  `json:"text"`      // message body
 	Ts   float64 `json:"ts"`        // server timestamp (seconds since epoch)
+}
+
+// Join is a client-to-server message to set the client's nickname.
+// Only the first Join message per connection is honoured; subsequent ones are ignored.
+type Join struct {
+	Type string `json:"type"` // must be "join"
+	Name string `json:"name"` // desired display name (trimmed, non-empty, max 32 chars)
+}
+ 
+// Presence is a server-to-client message broadcasting the current viewer list.
+type Presence struct {
+	Type    string   `json:"type"`    // always "presence"
+	Count   int      `json:"count"`   // number of connected clients
+	Viewers []string `json:"viewers"` // display names of all connected clients
 }
